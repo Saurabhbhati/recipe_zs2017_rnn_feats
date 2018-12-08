@@ -5,20 +5,15 @@ Perform cepstral mean and variance normalization and add deltas to features.
 
 Author: Herman Kamper
 Contact: kamperh@gmail.com
-Date: 2015, 2018
+Date: 2015-2017
 """
 
-from __future__ import division
-from __future__ import print_function
 from os import path
 import argparse
 import os
 import sys
 
-sys.path.append(path.join(".."))
-
 from utils import shell
-
 
 #-----------------------------------------------------------------------------#
 #                              UTILITY FUNCTIONS                              #
@@ -26,10 +21,9 @@ from utils import shell
 
 def check_argv():
     """Check the command line arguments."""
-    parser = argparse.ArgumentParser(
-        description=__doc__.strip().split("\n")[0], add_help=False
-        )
-    parser.add_argument("dataset", type=str, choices=["buckeye", "xitsonga"])
+    parser = argparse.ArgumentParser(description=__doc__.strip().split("\n")[0], add_help=False)
+    parser.add_argument("lang", type=str, choices=["english", "french", "mandarin", "LANG1", "LANG2"])
+    parser.add_argument("subset", type=str, choices=["train", "test"])
     if len(sys.argv) == 1:
         parser.print_help()
         sys.exit(1)
@@ -43,28 +37,22 @@ def check_argv():
 def main():
     args = check_argv()
 
-    # Directory and configuration variables
-    scp_dir = path.join(args.dataset, "scp")
-    log_dir = path.join(args.dataset, "log")
+    basedir = args.lang + "_" + args.subset
+    scp_dir = path.join(basedir, "scp")
+    log_dir = path.join(basedir, "log")
     config_dir = "config"
 
-    cmn_dir = path.join(args.dataset, "cmn")
-    cvn_dir = path.join(args.dataset, "cvn")
-    cmvn_dd_dir = path.join(args.dataset, "cmvn_dd")
+    cmn_dir = path.join(basedir, "cmn")
+    cvn_dir = path.join(basedir, "cvn")
+    cmvn_dd_dir = path.join(basedir, "cmvn_dd")
 
     cmn_config_fn = path.join(config_dir, "cmn.conf")
-    cvn_config_fn = path.join(config_dir, "cvn." + args.dataset + ".conf")
-    cmvn_dd_config_fn = path.join(
-        config_dir, "cmvn_dd." + args.dataset + ".conf"
-        )
+    cvn_config_fn = path.join(config_dir, "cvn." + basedir + ".conf")
+    cmvn_dd_config_fn = path.join(config_dir, "cmvn_dd." + basedir + ".conf")
 
-    segments_scp_fn = path.join(
-        scp_dir, args.dataset + ".mfcc.raw.segments.scp"
-        )
-    cmvn_dd_scp_fn = path.join(scp_dir, args.dataset + ".mfcc.cmvn_dd.scp")
-    cmvn_dd_coding_scp_fn = path.join(
-        scp_dir, args.dataset + ".mfcc.cmvn_dd.coding.scp"
-        )
+    segments_scp_fn = path.join(scp_dir, "mfcc.raw.segments.scp")
+    cmvn_dd_scp_fn = path.join(scp_dir, "mfcc.cmvn_dd.scp")
+    cmvn_dd_coding_scp_fn = path.join(scp_dir, "mfcc.cmvn_dd.coding.scp")
 
     for d in [cmn_dir, cvn_dir, cmvn_dd_dir]:
         if not path.isdir(d):
@@ -72,26 +60,22 @@ def main():
     cmvn_dd_dir = path.abspath(cmvn_dd_dir)
 
     # Get mask from config
-    mask = [
-        i.strip().split() for i in open(cvn_config_fn) if "CMEANMASK" in i
-        ][0][-1]
+    mask = [i.strip().split() for i in open(cvn_config_fn) if "CMEANMASK" in i][0][-1]
 
-    print("Getting CMN vectors")
+    print("HCompV: CMN vectors")
     shell(
-        "HCompV -A -D -V -T 1 -C " + cmn_config_fn + " -c " + cmn_dir + " -k "
-        + mask
+        "/home/saurabh/Documents/HTK-bin/HCompV -A -D -V -T 1 -C " + cmn_config_fn + " -c " + cmn_dir + " -k " + mask
         + " -q m -S " + segments_scp_fn
         )
 
-    print("Getting CVN vectors")
+    print("HCompV: CVN vectors")
     shell(
-        "HCompV -A -D -V -T 1 -C " + cvn_config_fn + " -c " + cvn_dir + " -k "
-        + mask
+        "/home/saurabh/Documents/HTK-bin/HCompV -A -D -V -T 1 -C " + cvn_config_fn + " -c " + cvn_dir + " -k " + mask
         + " -q v -S " + segments_scp_fn
         )
 
-    print("Writing CMVN DD SCP:", cmvn_dd_scp_fn)
-    print("Writing CMVN DD coding SCP:", cmvn_dd_coding_scp_fn)
+    print("Writing CMVN DD SCP: " + cmvn_dd_scp_fn)
+    print("Writing CMVN DD coding SCP: " + cmvn_dd_coding_scp_fn)
     cmvn_dd_scp = open(cmvn_dd_scp_fn, "w")
     cmvn_dd_coding_scp = open(cmvn_dd_coding_scp_fn, "w")
     segments_scp = open(segments_scp_fn)
@@ -105,14 +89,13 @@ def main():
 
     # Get unit covariance file
     unit_covar_fn = "unit.covar"
-    f = open(unit_covar_fn, "w")
-    f.write("<VARSCALE> 39\n")
-    f.write(" 1.000000e+00" *39)
-    f.close()
+    with open(unit_covar_fn, "w") as f:
+        f.write("<VARSCALE> 39\n")
+        f.write(" 1.000000e+00" *39)
 
-    print("Coding to CMVN DD")
+    print "HCopy: CMVN DD"
     shell(
-        "HCopy -T 7 -A -D -V -S " + cmvn_dd_coding_scp_fn + " -C " +
+        "/home/saurabh/Documents/HTK-bin/HCopy -T 7 -A -D -V -S " + cmvn_dd_coding_scp_fn + " -C " +
         cmvn_dd_config_fn + " > " + path.join(log_dir, "cmvn_dd.log")
         )
 

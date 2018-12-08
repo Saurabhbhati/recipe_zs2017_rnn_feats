@@ -1,25 +1,22 @@
 #!/usr/bin/env python
 
 """
-Get the SCP containing the desired segments.
+Get the SCP containing the active speech segments.
 
 Author: Herman Kamper
 Contact: kamperh@gmail.com
-Date: 2011-2015, 2018
+Date: 2011-2017
 """
 
-from __future__ import division
-from __future__ import print_function
 from os import path
 import argparse
 import os
 import sys
 
-sys.path.append(path.join(".."))
+sys.path.append(path.join("..", ".."))
 
+from paths import ZEROSPEECH_TOOLDIR, ZEROSPEECH_DATADIR
 from utils import shell
-
-data_dir = path.join("..", "..", "data")
 
 
 #-----------------------------------------------------------------------------#
@@ -28,10 +25,9 @@ data_dir = path.join("..", "..", "data")
 
 def check_argv():
     """Check the command line arguments."""
-    parser = argparse.ArgumentParser(
-        description=__doc__.strip().split("\n")[0], add_help=False
-        )
-    parser.add_argument("dataset", type=str, choices=["buckeye", "xitsonga"])
+    parser = argparse.ArgumentParser(description=__doc__.strip().split("\n")[0], add_help=False)
+    parser.add_argument("lang", type=str, choices=["english", "french", "mandarin", "LANG1", "LANG2"])
+    parser.add_argument("subset", type=str, choices=["train", "test"])
     if len(sys.argv) == 1:
         parser.print_help()
         sys.exit(1)
@@ -45,86 +41,111 @@ def check_argv():
 def main():
     args = check_argv()
 
-    if args.dataset == "buckeye":
-        fa_fn = path.join(data_dir, "english.wrd")
-    elif args.dataset == "xitsonga":
-        fa_fn = path.join(data_dir, "xitsonga.wrd")
-
-    list_dir = path.join(args.dataset, "lists")
-    scp_dir = path.join(args.dataset, "scp")
-    feat_dir = path.join(args.dataset, "raw")
+    basedir = args.lang + "_" + args.subset
+    list_dir = path.join(basedir, "lists")
+    scp_dir = path.join(basedir, "scp")
+    feat_dir = path.join(basedir, "raw")
     output_list = path.join(list_dir, "segments.list")
-    output_scp = path.join(scp_dir, args.dataset + ".mfcc.raw.segments.scp")
+    output_scp = path.join(scp_dir, "mfcc.raw.segments.scp")
 
     for d in [list_dir]:
         if not path.isdir(d):
             os.makedirs(d)
     feat_dir = path.abspath(feat_dir)
 
-    print("Reading:", fa_fn)
-    segments = []  # (utterance, start_time, end_time)
-    prev_utterance = ""
-    prev_token_label = ""
-    prev_end_time = -1
-    start_time = -1
-    with open(fa_fn, "r") as f:
-        for line in f:
-            utterance, start_token, end_token, token_label = line.strip(
-                ).split()
-            start_token = float(start_token)
-            end_token = float(end_token)
-            utterance = utterance.replace("_", "-")
+    if args.subset == "train":
+        
+        if "LANG" in args.lang:
+            vad_fn = path.join(
+                ZEROSPEECH_DATADIR, "surprise", "train", args.lang, args.lang +
+                "_VAD.csv"
+                )
+        else:
+            vad_fn = path.join(
+                ZEROSPEECH_TOOLDIR, "track2", "baseline", "baseline_" +
+                args.lang, "data", args.lang + "_vad"    
+                )
+        print("Reading: " + vad_fn)
+        segments = []  # (utterance, start_frame, end_frame)
+        with open(vad_fn) as f:
+            f.readline()
+            for line in f:
+                utt_label, start, end = line.strip().split(",")
+                utt_label = utt_label.replace("_", "-")
+                if "LANG" in args.lang:
+                    start = int(round(float(start)*100))
+                    end = int(round(float(end)*100))
+                else:
+                    start = int(start)
+                    end = int(end)
+                segments.append((utt_label, start, end))
 
-            if token_label in ["SIL", "SPN"]:
+        print("Running: HList for lengths")
+        lengths = {}
+        for line in shell(
+                "/home/saurabh/Documents/HTK-bin/HList -z -h " + path.join(feat_dir, "*.mfcc" +
+                " | paste - - - - - ")
+                ).split("\n"):
+            if len(line) == 0:
                 continue
-            if prev_end_time != start_token or prev_utterance != utterance:
-                if prev_end_time != -1:
-                    segments.append(
-                        (prev_utterance, start_time, prev_end_time)
-                        )
-                start_time = start_token
+            line = line.split(" ")
+            line = [i for i in line if i != ""]
+            utt_label = line[line.index("Source:") + 1]
+            utt_label = path.splitext(path.split(utt_label)[-1])[0]
+            frames = line[line.index("Samples:") + 1]
+            lengths[utt_label] = int(frames)
 
-            prev_end_time = end_token
-            prev_token_label = token_label
-            prev_utterance = utterance
-        segments.append((prev_utterance, start_time, prev_end_time))
+        print("Writing: " + output_scp)
+        missing = []
+        with open(output_scp, "w") as f:
+            for basename, start, end in segments:
+                if basename not in lengths:
+                    if basename not in missing:
+                        print("Warning: Missing audio: " + basename)
+                        missing.append(basename)
+                    continue
+                if start == end:
+                    print("Warning: Skipping: {} ({} to {})".format(basename, start, end))
+                    continue
+                if end > lengths[basename]:
+                    if start > lengths[basename]:
+                        print("Warning: Problem with lengths (truncating): " + basename)
+                        print lengths[basename]
+                        print start
+                        print end
+                        assert False
+                        continue
+                    end = lengths[basename] - 1
+                segment_label = "{}_{:08d}-{:08d}.mfcc".format(basename, start, end)
+                # segment_label = "%s_%06d-%06d.mfcc" % (basename, start, end)
+                f.write(
+                    segment_label + "=" + path.join(feat_dir, basename + ".mfcc") +
+                    "[" + str(start) + "," + str(end) + "]\n"
+                    )
 
-    print("Writing:", output_list)
-    with open(output_list, "w") as f:
-        for utt, start, end in segments:
-            f.write(utt + " " + str(start) + " " + str(end) + "\n")
+    elif args.subset == "test":
 
-    print("Getting raw audio file lengths")
-    lengths = {}
-    for line in shell(
-            "HList -z -h " + path.join(feat_dir, "*.mfcc" +
-            " | paste - - - - - ")
-            ).split("\n"):
-        if len(line) == 0:
-            continue
-        line = line.split(" ")
-        line = [i for i in line if i != ""]
-        utt = line[line.index("Source:") + 1]
-        utt = path.splitext(path.split(utt)[-1])[0]
-        frames = line[line.index("Samples:") + 1]
-        lengths[utt] = int(frames)
+        raw_scp = path.join(scp_dir, "mfcc.raw.scp")
+        print("Reading: " + raw_scp)
+        lines = []
+        with open(raw_scp) as f:
+            for line in f:
+                features_fn = line.strip().split(" ")[-1]
+                basename = path.splitext(path.split(features_fn)[-1])[0]
+                start = 0
+                if basename.startswith("001s"):
+                    end = 98
+                elif basename.startswith("010s"):
+                    end = 998
+                elif basename.startswith("120s"):
+                    end = 11998
+                segment_label = "{}_{:05d}-{:05d}.mfcc".format(basename, start, end)
+                lines.append(segment_label + "=" + features_fn + "[" + str(start) + "," + str(end) + "]")
 
-    print("Writing:", output_scp)
-    f = open(output_scp, "w")
-    for basename, start_time, end_time in segments:
-        start = int(round(float(start_time) * 100))
-        end = int(round(float(end_time) * 100))
-        if end > lengths[basename]:
-            if start > lengths[basename]:
-                print("Warning: Problem with lengths (truncating):", basename)
-                continue
-            end = lengths[basename] - 1
-        segment_label = "%s_%06d-%06d.mfcc" % (basename, start, end)
-        f.write(
-            segment_label + "=" + path.join(feat_dir, basename + ".mfcc") + "["
-            + str(start) + "," + str(end) + "]\n"
-            )
-    f.close()
+        print("Writing: " + output_scp)
+        with open(output_scp, "w") as f:
+            f.write("\n".join(lines))
+            f.write("\n")
 
 
 if __name__ == "__main__":

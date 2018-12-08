@@ -1,29 +1,26 @@
 #!/usr/bin/env python
 
 """
-Code the data to raw MFCCs without any normalization.
+Code the data to raw features without any normalization.
 
 Author: Herman Kamper
-Contact: kamperh@gmail.com
-Date: 2011-2015, 2018
+Contact: h.kamper@sms.ed.ac.uk
+Date: 2011-2017
 """
 
-from __future__ import division
-from __future__ import print_function
+from datetime import datetime
 from os import path
 import argparse
 import glob
 import os
-import subprocess
 import sys
 
-sys.path.append(path.join(".."))
 sys.path.append(path.join("..", ".."))
 
-from paths import buckeye_dir, xitsonga_dir
+from paths import ZEROSPEECH_DATADIR
 from utils import shell
 
-config_fn = path.join("config", "hcopy.wav.mfcc.wb.conf")
+CONFIG_FN = path.join("config", "hcopy.wav.mfcc.wb.conf")
 
 
 #-----------------------------------------------------------------------------#
@@ -32,10 +29,9 @@ config_fn = path.join("config", "hcopy.wav.mfcc.wb.conf")
 
 def check_argv():
     """Check the command line arguments."""
-    parser = argparse.ArgumentParser(
-        description=__doc__.strip().split("\n")[0], add_help=False
-        )
-    parser.add_argument("dataset", type=str, choices=["buckeye", "xitsonga"])
+    parser = argparse.ArgumentParser(description=__doc__.strip().split("\n")[0], add_help=False)
+    parser.add_argument("lang", type=str, choices=["english", "french", "mandarin", "LANG1", "LANG2"])
+    parser.add_argument("subset", type=str, choices=["train", "test"])
     if len(sys.argv) == 1:
         parser.print_help()
         sys.exit(1)
@@ -49,37 +45,45 @@ def check_argv():
 def main():
     args = check_argv()
 
-    if args.dataset == "buckeye":
-        wavs = path.join(buckeye_dir, "*", "*.wav")
-    elif args.dataset == "xitsonga":
-        wavs = path.join(xitsonga_dir, "*.wav")
+    print(datetime.now())
 
-    target_dir = path.join(args.dataset, "raw")
-    scp_dir = path.join(args.dataset, "scp")
-    log_dir = path.join(args.dataset, "log")
+    zerospeech_datadir = ZEROSPEECH_DATADIR
+    if "LANG" in args.lang:
+        zerospeech_datadir = path.join(zerospeech_datadir, "surprise")
+    if args.subset == "train":
+        wavs = path.join(zerospeech_datadir, args.subset, args.lang, "*.wav")
+    elif args.subset == "test":
+        wavs = path.join(zerospeech_datadir, args.subset, args.lang, "*", "*.wav")
+
+    basedir = args.lang + "_" + args.subset
+    target_dir = path.join(basedir, "raw")
+    scp_dir = path.join(basedir, "scp")
+    log_dir = path.join(basedir, "log")
 
     for d in [target_dir, scp_dir, log_dir]:
         if not path.isdir(d):
             os.makedirs(d)
     target_dir = path.abspath(target_dir)
 
-    raw_scp = path.join(scp_dir, args.dataset + ".mfcc.raw.scp")
-    print("Writing raw coding SCP:", raw_scp)
-    f = open(raw_scp, "w")
-    for wav_fn in sorted(glob.glob(wavs)):
-        basename = path.splitext(path.split(wav_fn)[-1])[0]
-        basename = basename.replace("_", "-")
+    raw_scp = path.join(scp_dir, "mfcc.raw.scp")
+    print("Writing: " + raw_scp)
+    with open(raw_scp, "w") as f:
+        for wav_fn in sorted(glob.glob(wavs)):
+            basename = path.splitext(path.split(wav_fn)[-1])[0]
+            basename = basename.replace("_", "-")
+            if args.subset == "test":
+                basename = "{:03d}s-{:05d}".format(
+                    int(path.split(path.split(wav_fn)[0])[-1][:-1]), int(basename)
+                    )
+            f.write(wav_fn + " " + path.join(target_dir, basename + ".mfcc") + "\n")
 
-        mfcc_fn = path.join(target_dir, basename + ".mfcc")
-
-        f.write(wav_fn + " " + mfcc_fn + "\n")
-    f.close()
-
-    print("Coding raw MFCCs")
+    print("Running: HCopy")
     shell(
-        "HCopy -T 7 -A -D -V -S " + raw_scp + " -C " + config_fn + " > " + 
-        path.join(log_dir, args.dataset + ".mfcc.raw.log")
+        "/home/saurabh/Documents/HTK-bin/HCopy -T 7 -A -D -V -S " + raw_scp + " -C " + CONFIG_FN + " > " + 
+        path.join(log_dir, "mfcc.raw.log")
         )
+
+    print(datetime.now())
 
 
 if __name__ == "__main__":
